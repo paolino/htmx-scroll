@@ -73,6 +73,7 @@ executable htmx-scroll
         , containers
         , scotty
         , lucid
+        , optparse-applicative
         , text
 
     -- Directories containing source files.

@@ -11,6 +11,7 @@ where
 
 import Data.Set (Set, toList)
 import Data.Text (Text)
+import Data.Traversable (forM)
 import Htmx
     ( hxInclude_
     , hxPost_
@@ -45,25 +46,29 @@ data ChangeShown index
         }
     deriving (Show)
 changes
-    :: Eq index
-    => Configuration index
+    :: (Eq index, Monad m)
+    => Configuration m index
     -> Set index
     -> index
-    -> [ChangeShown index]
+    -> m [ChangeShown index]
 changes configuration shown rcenter =
     let insertAfter c md = do
-            Just nc <- [next configuration c]
-            let delete = case md of
-                    Nothing -> []
-                    Just d -> [DeleteShown d]
-            delete <> [ChangeShown After nc]
+            mnc <- next configuration c
+            pure $ do
+                Just nc <- [mnc]
+                let delete = case md of
+                        Nothing -> []
+                        Just d -> [DeleteShown d]
+                delete <> [ChangeShown After nc]
         insertBefore c md = do
-            Just pc <- [previous configuration c]
-            let delete = case md of
-                    Nothing -> []
-                    Just d -> [DeleteShown d]
-            delete <> [ChangeShown Before pc]
-        boot = [ChangeShown After rcenter]
+            mpc <- previous configuration c
+            pure $ do
+                Just pc <- [mpc]
+                let delete = case md of
+                        Nothing -> []
+                        Just d -> [DeleteShown d]
+                delete <> [ChangeShown Before pc]
+        boot = pure [ChangeShown After rcenter]
     in  case toList shown of
             [] -> boot
             [c0] -> insertAfter c0 Nothing
@@ -74,16 +79,16 @@ changes configuration shown rcenter =
             [c0, c1, _c2, c3]
                 | c1 == rcenter -> insertBefore c0 $ Just c3
                 | c3 == rcenter -> insertAfter c3 $ Just c0
-            _ -> []
+            _ -> pure []
 
-data Configuration index = Configuration
-    { renderIndexRows :: index -> Html ()
+data Configuration m index = Configuration
+    { renderIndexRows :: index -> m (Html ())
     , uniqueScrollingId :: Text
-    , previous :: index -> Maybe index
-    , next :: index -> Maybe index
+    , previous :: index -> m (Maybe index)
+    , next :: index -> m (Maybe index)
     , renderIndex :: index -> Text
     , updateURL :: index -> Text
-    , zeroIndex :: index
+    , zeroIndex :: m index
     , presentFieldName :: Text
     }
 
@@ -102,14 +107,14 @@ intersectNames = "intersect"
 mkId :: Text -> Text
 mkId x = "#" <> x
 
-appendScrollingId :: Configuration index -> Text -> Text
+appendScrollingId :: Configuration m index -> Text -> Text
 appendScrollingId Configuration{uniqueScrollingId} =
     (<> ("-" <> uniqueScrollingId))
 
-appendIndex :: Configuration index -> index -> Text -> Text
+appendIndex :: Configuration m index -> index -> Text -> Text
 appendIndex Configuration{renderIndex} j = (<> ("-" <> renderIndex j))
 
-appendIndexAndScrollingId :: Configuration index -> index -> Text -> Text
+appendIndexAndScrollingId :: Configuration m index -> index -> Text -> Text
 appendIndexAndScrollingId c j = appendScrollingId c . appendIndex c j
 
 dontSwap :: [Attribute] -> [Attribute]
@@ -118,26 +123,26 @@ dontSwap = (:) $ hxSwap_ "none"
 triggerIntersect :: [Attribute] -> [Attribute]
 triggerIntersect = (:) $ hxTrigger_ "intersect"
 
-includeScrollingState :: Configuration index -> [Attribute] -> [Attribute]
+includeScrollingState :: Configuration m index -> [Attribute] -> [Attribute]
 includeScrollingState c =
     (:)
         $ hxInclude_
         $ mkId
         $ appendScrollingId c stateName
 
-tbodyDataId :: Configuration index -> index -> [Attribute] -> [Attribute]
+tbodyDataId :: Configuration m index -> index -> [Attribute] -> [Attribute]
 tbodyDataId c j =
     (:)
         $ id_
         $ appendIndexAndScrollingId c j dataNames
 
-tbodyIntersectId :: Configuration index -> index -> [Attribute] -> [Attribute]
+tbodyIntersectId :: Configuration m index -> index -> [Attribute] -> [Attribute]
 tbodyIntersectId c j =
     (:)
         $ id_
         $ appendIndexAndScrollingId c j intersectNames
 
-blockId :: Configuration index -> index -> Html ()
+blockId :: Configuration m index -> index -> Html ()
 blockId c j =
     input_
         [ id_ $ appendIndexAndScrollingId c j stateName
@@ -146,10 +151,10 @@ blockId c j =
         , value_ $ renderIndex c j
         ]
 
-postToUpdate :: Configuration index -> index -> [Attribute] -> [Attribute]
+postToUpdate :: Configuration m index -> index -> [Attribute] -> [Attribute]
 postToUpdate c j = (:) $ hxPost_ $ updateURL c j
 
-updaterAttributes :: Configuration index -> index -> [Attribute]
+updaterAttributes :: Configuration m index -> index -> [Attribute]
 updaterAttributes c j =
     dontSwap
         . triggerIntersect
@@ -158,23 +163,28 @@ updaterAttributes c j =
         . tbodyIntersectId c j
         $ []
 
-renderBlock :: Configuration index -> index -> Html ()
-renderBlock c j = tbody_ (tbodyDataId c j []) $ renderIndexRows c j
+renderBlock :: Functor m => Configuration m index -> index -> m (Html ())
+renderBlock c j = tbody_ (tbodyDataId c j []) <$> renderIndexRows c j
 
-renderChange :: Configuration index -> ChangeShown index -> Html ()
+renderChange
+    :: Monad m
+    => Configuration m index
+    -> ChangeShown index
+    -> m (Html ())
 renderChange c (ChangeShown dir i) = do
-    let newIntersect =
-            table_ [hxSwapOob_ w]
-                $ tbody_ (updaterAttributes c i) mempty
-        newData = table_ [hxSwapOob_ w] $ renderBlock c i
-    case dir of
-        After -> do
-            newIntersect
-            newData
-        Before -> do
-            newData
-            newIntersect
-    form_ [hxSwapOob_ f] $ blockId c i
+    newData <- table_ [hxSwapOob_ w] <$> renderBlock c i
+    pure $ do
+        let newIntersect =
+                table_ [hxSwapOob_ w]
+                    $ tbody_ (updaterAttributes c i) mempty
+        case dir of
+            After -> do
+                newIntersect
+                newData
+            Before -> do
+                newData
+                newIntersect
+        form_ [hxSwapOob_ f] $ blockId c i
   where
     f = case dir of
         After -> "afterbegin:" <> appendScrollingId c (mkId stateName)
@@ -182,7 +192,7 @@ renderChange c (ChangeShown dir i) = do
     w = case dir of
         After -> "beforeend:" <> appendScrollingId c (mkId tableName)
         Before -> "afterbegin:" <> appendScrollingId c (mkId tableName)
-renderChange c (DeleteShown i) = do
+renderChange c (DeleteShown i) = pure $ do
     table_
         [ id_ $ appendScrollingId c tableName
         , hxSwapOob_
@@ -200,22 +210,28 @@ renderChange c (DeleteShown i) = do
         , hxSwapOob_ "delete"
         ]
 
-setup :: Configuration index -> Html ()
-setup c = div_ [id_ $ "scrolling-" <> uniqueScrollingId c] $ do
-    form_ [id_ $ appendScrollingId c stateName] mempty
-    table_ [id_ $ appendScrollingId c tableName]
-        $ tbody_ (updaterAttributes c $ zeroIndex c) mempty
+setup :: Monad m => Configuration m index -> m (Html ())
+setup c = do
+    zero <- zeroIndex c
+    pure $ do
+        div_ [id_ $ "scrolling-" <> uniqueScrollingId c] $ do
+            form_ [id_ $ appendScrollingId c stateName] mempty
+            table_ [id_ $ appendScrollingId c tableName]
+                $ tbody_ (updaterAttributes c zero) mempty
 
-data Scrolling index = Scrolling
-    { widget :: Html ()
-    , scroll :: Set index -> index -> Html ()
+data Scrolling m index = Scrolling
+    { widget :: m (Html ())
+    , scroll :: Set index -> index -> m (Html ())
     }
 
-makeScrolling :: Eq index => Configuration index -> Scrolling index
+makeScrolling
+    :: (Eq index, Monad m)
+    => Configuration m index
+    -> Scrolling m index
 makeScrolling c =
     Scrolling
         { widget = setup c
-        , scroll = \state focus ->
-            foldMap (renderChange c)
-                $ changes c state focus
+        , scroll = \state focus -> do
+            cs <- changes c state focus
+            fmap mconcat $ forM cs $ renderChange c
         }
