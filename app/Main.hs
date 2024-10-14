@@ -19,7 +19,6 @@ import Lucid
     , html_
     , meta_
     , name_
-    , p_
     , renderText
     , span_
     , td_
@@ -104,7 +103,6 @@ title = h4_ "Infinie scrolling in constant space with HTMX"
 
 note :: Html ()
 note = do
-    p_ "You can brick it by fast scrolling and so jumping the intersection. Just unbrick it by scrolling a bit in the opposite direction."
     span_ $ do
         "Code: "
         a_ [href_ "https://github.com/paolino/htmx-scroll"] "paolino/htmx-scroll"
