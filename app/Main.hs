@@ -11,20 +11,29 @@ import Lucid
     , ToHtml (toHtml)
     , a_
     , body_
+    , br_
+    , button_
     , charset_
     , content_
+    , div_
+    , form_
     , h4_
     , head_
     , href_
     , html_
+    , id_
+    , input_
     , meta_
     , name_
     , renderText
     , span_
+    , style_
     , td_
     , title_
     , tr_
+    , type_
     )
+
 import Options.Applicative
     ( Parser
     , ParserInfo
@@ -107,6 +116,18 @@ note = do
         "Code: "
         a_ [href_ "https://github.com/paolino/htmx-scroll"] "paolino/htmx-scroll"
 
+control :: Html ()
+control = form_ [id_ "control"] $ do
+    span_ $ do
+        "From: "
+        input_ [type_ "number", name_ "from"]
+    br_ mempty
+    span_ $ do
+        "To: "
+        input_ [type_ "number", name_ "to"]
+    br_ mempty
+    button_ [type_ "submit"] "Update"
+
 main :: IO ()
 main = do
     opts <- execParser optsParser
@@ -125,8 +146,12 @@ main = do
                             ]
                         useHtmx
                     body_ $ do
-                        title
-                        note
+                        div_
+                            [style_ "position: fixed; top: 0; left: 0; padding-left: 4em;"]
+                            $ do
+                                title
+                                control
+                                note
                         runIdentity $ widget scroller
 
         post "/update" $ do
@@ -143,7 +168,7 @@ scrollingInts pageSize =
         $ Configuration
             { renderIndexRows = pure . renderRows
             , uniqueScrollingId = "ints"
-            , previous = \n -> pure $ if n == 0 then Nothing else Just (n - 1)
+            , previous = \n -> pure $ Just (n - 1)
             , next = \n -> pure $ Just (n + 1)
             , renderIndex = showT
             , updateURL = \n -> "/update?center=" <> showT n

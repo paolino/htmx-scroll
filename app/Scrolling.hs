@@ -51,7 +51,7 @@ changes
     -> index
     -> m [Change index]
 changes configuration presences signal = case Set.toList presences of
-    [_] -> onNext signal Add <^> onPrevious signal Add
+    [_] -> onNext signal Add 
     [p0, p1]
         | p1 == signal -> onNext signal Add
         | p0 == signal -> onPrevious signal Add
