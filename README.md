@@ -31,7 +31,4 @@ cabal run htmx-scroll -- --port 3001 --page 100
 
 ## Notes on stability
 
-1. When fast scrolling, the browser is somehow able to let some tags jump the viewport without creating an `intersect` event.
-   In this case the next or previous page is not loaded and the scrolling is stuck. Scrolling a bit on the opposite direction
-   let the tag reveal and fire the `intersect` event.
-2. If we zoom out enough, the pagesize will be too small to fill the viewport and the requests will loop indefinitely.
+1. If we zoom out enough, the pagesize will be too small to fill the viewport and the requests will loop indefinitely.

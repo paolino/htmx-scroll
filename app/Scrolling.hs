@@ -9,8 +9,8 @@ module Scrolling
     )
 where
 
-import Control.Monad (join)
-import Data.Set (Set, toList)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Traversable (forM)
 import Htmx
@@ -37,66 +37,65 @@ import Lucid
 data Direction = Before | After
     deriving (Show)
 
-data ChangeShown index
-    = Prepend index
-    | Append index (Maybe index)
-    | DeleteHead index index
-    | DeleteTail index
+(<^>) :: Applicative m => m [a] -> m [a] -> m [a]
+(<^>) = liftA2 (<>)
+
+data Change index
+    = Delete index
+    | Add Direction index
     deriving (Show)
 changes
     :: (Eq index, Monad m)
     => Configuration m index
     -> Set index
     -> index
-    -> m [ChangeShown index]
-changes configuration shown rcenter =
-    let insertAfter c md = do
-            mnc <- next configuration c
-            pure $ do
-                let delete = case md of
-                        Nothing -> []
-                        Just d -> [DeleteTail d]
-                delete <> [Append c mnc]
-        insertBefore c mds = do
-            mpc <- previous configuration c
-            pure $ do
-                Just pc <- [mpc]
-                let delete = case mds of
-                        Nothing -> []
-                        Just (d, pd) -> [DeleteHead d pd]
-                delete <> [Prepend pc]
-        boot = do
-            mnc <- next configuration rcenter
-            mnnc <- join <$> mapM (next configuration) mnc
-            pure
-                $ [Append rcenter mnc] <> case mnc of
-                    Nothing -> []
-                    Just nc -> [Append nc mnnc]
-    in  case toList shown of
-            [] -> boot
-            [c0] ->
-                (<>)
-                    <$> insertAfter c0 Nothing
-                    <*> insertBefore c0 Nothing
-            [c0, c1] ->
-                (<>)
-                    <$> insertAfter c1 Nothing
-                    <*> insertBefore c0 Nothing
-            [c0, _c1, c2] ->
-                (<>)
-                    <$> insertAfter c2 Nothing
-                    <*> insertBefore c0 Nothing
-            [c0, _c1, _c2, c3] -> do
-                scrollup <- insertAfter c3 Nothing
-                case scrollup of
-                    [] -> insertBefore c0 Nothing
-                    _ -> pure scrollup
-            [c0, c1, _c2, c3, c4]
-                | c1 == rcenter -> insertBefore c0 $ Just (c4, c3)
-                | c3 == rcenter -> insertAfter c4 $ Just c0
-                | c0 == rcenter -> insertBefore c0 $ Just (c4, c3)
-                | c4 == rcenter -> insertAfter c4 $ Just c0
-            _ -> pure []
+    -> m [Change index]
+changes configuration presences signal = case Set.toList presences of
+    [_] -> onNext signal Add <^> onPrevious signal Add
+    [p0, p1]
+        | p1 == signal -> onNext signal Add
+        | p0 == signal -> onPrevious signal Add
+    [p0, _p1, p2]
+        | p2 == signal -> onNext signal Add
+        | p0 == signal -> onPrevious signal Add
+    [p0, _p1, _p2, p3]
+        | p3 == signal -> onNext signal Add <^> pure [Delete p0]
+        | p0 == signal -> onPrevious signal Add <^> pure [Delete p3]
+    _ -> pure []
+  where
+    onNext i f = do
+        nextIndex <- next configuration i
+        pure $ case nextIndex of
+            Nothing -> []
+            Just j -> [f After j]
+    onPrevious i f = do
+        previousIndex <- previous configuration i
+        pure $ case previousIndex of
+            Nothing -> []
+            Just j -> [f Before j]
+
+renderChange :: Monad m => Configuration m index -> Change index -> m (Html ())
+renderChange c (Delete i) = pure $ do
+    table_
+        [ id_ $ appendScrollingId c tableName
+        , hxSwapOob_
+            $ "delete:" <> appendIndexAndScrollingId c i (mkId dataNames)
+        ]
+        mempty
+    input_
+        [ id_ $ appendIndexAndScrollingId c i stateName
+        , hxSwapOob_ "delete"
+        ]
+renderChange c (Add dir i) = do
+    newData <- table_ [hxSwapOob_ w] <$> renderPage c i
+    pure $ do
+        newData
+        form_ [hxSwapOob_ f] $ renderPageId c i
+  where
+    f = "beforeend:" <> appendScrollingId c (mkId stateName)
+    w = case dir of
+        After -> "beforeend:" <> appendScrollingId c (mkId tableName)
+        Before -> "afterbegin:" <> appendScrollingId c (mkId tableName)
 
 data Configuration m index = Configuration
     { renderIndexRows :: index -> m (Html ())
@@ -117,9 +116,6 @@ tableName = "table"
 
 dataNames :: Text
 dataNames = "data"
-
-intersectNames :: Text
-intersectNames = "intersect"
 
 mkId :: Text -> Text
 mkId x = "#" <> x
@@ -153,14 +149,8 @@ tbodyDataId c j =
         $ id_
         $ appendIndexAndScrollingId c j dataNames
 
-tbodyIntersectId :: Configuration m index -> index -> [Attribute] -> [Attribute]
-tbodyIntersectId c j =
-    (:)
-        $ id_
-        $ appendIndexAndScrollingId c j intersectNames
-
-blockId :: Configuration m index -> index -> Html ()
-blockId c j =
+renderPageId :: Configuration m index -> index -> Html ()
+renderPageId c j =
     input_
         [ id_ $ appendIndexAndScrollingId c j stateName
         , hidden_ ""
@@ -177,89 +167,26 @@ updaterAttributes c j =
         . triggerIntersect
         . includeScrollingState c
         . postToUpdate c j
-        . tbodyIntersectId c j
+        . tbodyDataId c j
         $ []
 
-renderBlock :: Functor m => Configuration m index -> index -> m (Html ())
-renderBlock c j = tbody_ (tbodyDataId c j []) <$> renderIndexRows c j
-
-renderChange
-    :: Monad m
+renderPage
+    :: Functor m
     => Configuration m index
-    -> ChangeShown index
+    -> index
     -> m (Html ())
-renderChange c (Prepend i) = do
-    newData <- table_ [hxSwapOob_ w] <$> renderBlock c i
-    pure $ do
-        let newIntersect =
-                table_ [hxSwapOob_ w]
-                    $ tbody_ (updaterAttributes c i) mempty
-        newData
-        newIntersect
-        form_ [hxSwapOob_ f] $ blockId c i
-  where
-    f = "beforeend:" <> appendScrollingId c (mkId stateName)
-    w = "afterbegin:" <> appendScrollingId c (mkId tableName)
-renderChange c (Append i mj) = do
-    newData <- table_ [hxSwapOob_ w] <$> renderBlock c i
-    pure $ do
-        newData
-        case mj of
-            Nothing -> pure ()
-            Just j -> do
-                let newIntersect =
-                        table_ [hxSwapOob_ w]
-                            $ tbody_ (updaterAttributes c j) mempty
-                newIntersect
-                form_ [hxSwapOob_ f] $ blockId c j
-  where
-    f = "afterbegin:" <> appendScrollingId c (mkId stateName)
-    w = "beforeend:" <> appendScrollingId c (mkId tableName)
-renderChange c (DeleteTail i) = pure $ do
-    table_
-        [ id_ $ appendScrollingId c tableName
-        , hxSwapOob_
-            $ "delete:" <> appendIndexAndScrollingId c i (mkId intersectNames)
-        ]
-        mempty
-    table_
-        [ id_ $ appendScrollingId c tableName
-        , hxSwapOob_
-            $ "delete:" <> appendIndexAndScrollingId c i (mkId dataNames)
-        ]
-        mempty
-    input_
-        [ id_ $ appendIndexAndScrollingId c i stateName
-        , hxSwapOob_ "delete"
-        ]
-renderChange c (DeleteHead i i') = pure $ do
-    table_
-        [ id_ $ appendScrollingId c tableName
-        , hxSwapOob_
-            $ "delete:" <> appendIndexAndScrollingId c i (mkId intersectNames)
-        ]
-        mempty
-    table_
-        [ id_ $ appendScrollingId c tableName
-        , hxSwapOob_
-            $ "delete:" <> appendIndexAndScrollingId c i' (mkId dataNames)
-        ]
-        mempty
-    input_
-        [ id_ $ appendIndexAndScrollingId c i stateName
-        , hxSwapOob_ "delete"
-        ]
+renderPage c j = tbody_ (updaterAttributes c j) <$> renderIndexRows c j
 
 setup :: Monad m => Configuration m index -> m (Html ())
 setup c = do
     zero <- zeroIndex c
+    zeroContent <- renderPage c zero
     pure $ do
         div_ [id_ $ "scrolling-" <> uniqueScrollingId c] $ do
             form_
                 [id_ $ appendScrollingId c stateName]
-                mempty
-            table_ [id_ $ appendScrollingId c tableName]
-                $ tbody_ (updaterAttributes c zero) mempty
+                $ renderPageId c zero
+            table_ [id_ $ appendScrollingId c tableName] zeroContent
 
 data Scrolling m index = Scrolling
     { widget :: m (Html ())
