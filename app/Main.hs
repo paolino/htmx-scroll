@@ -99,7 +99,7 @@ parsePresents :: [Text] -> [Int]
 parsePresents = fmap read . filter (/= "") . fmap unpack
 
 title :: Html ()
-title = h4_ "Infinie scrolling in constant space with HTMX"
+title = h4_ "Infinite scrolling in constant HTML with HTMX"
 
 note :: Html ()
 note = do
