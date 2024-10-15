@@ -51,7 +51,7 @@ changes
     -> index
     -> m [Change index]
 changes configuration presences signal = case Set.toList presences of
-    [_] -> onNext signal Add 
+    [_] -> onNext signal Add
     [p0, p1]
         | p1 == signal -> onNext signal Add
         | p0 == signal -> onPrevious signal Add
@@ -106,6 +106,7 @@ data Configuration m index = Configuration
     , updateURL :: index -> Text
     , zeroIndex :: m index
     , presentFieldName :: Text
+    , controlSelector :: Text
     }
 
 stateName :: Text
@@ -136,12 +137,14 @@ dontSwap = (:) $ hxSwap_ "none"
 triggerIntersect :: [Attribute] -> [Attribute]
 triggerIntersect = (:) $ hxTrigger_ "intersect"
 
-includeScrollingState :: Configuration m index -> [Attribute] -> [Attribute]
-includeScrollingState c =
+includeStates :: Configuration m index -> [Attribute] -> [Attribute]
+includeStates c =
     (:)
         $ hxInclude_
-        $ mkId
-        $ appendScrollingId c stateName
+        $ scrollingState <> "," <> controlState
+  where
+    scrollingState = mkId $ appendScrollingId c stateName
+    controlState = controlSelector c
 
 tbodyDataId :: Configuration m index -> index -> [Attribute] -> [Attribute]
 tbodyDataId c j =
@@ -165,7 +168,7 @@ updaterAttributes :: Configuration m index -> index -> [Attribute]
 updaterAttributes c j =
     dontSwap
         . triggerIntersect
-        . includeScrollingState c
+        . includeStates c
         . postToUpdate c j
         . tbodyDataId c j
         $ []

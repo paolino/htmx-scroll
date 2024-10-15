@@ -1,9 +1,10 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 import Control.Monad (forM_)
 import Data.Functor.Identity (Identity (..))
-import qualified Data.Set as Set
+import Data.Set qualified as Set
 import Data.Text (Text, unpack)
 import Htmx (showT, useHtmx)
 import Lucid
@@ -11,7 +12,6 @@ import Lucid
     , ToHtml (toHtml)
     , a_
     , body_
-    , br_
     , button_
     , charset_
     , content_
@@ -28,10 +28,12 @@ import Lucid
     , renderText
     , span_
     , style_
+    , table_
     , td_
     , title_
     , tr_
     , type_
+    , value_
     )
 
 import Options.Applicative
@@ -52,6 +54,7 @@ import Options.Applicative
     , showDefault
     , value
     , (<**>)
+    , (<|>)
     )
 import Scrolling
     ( Configuration (..)
@@ -60,11 +63,13 @@ import Scrolling
     , scroll
     )
 import Web.Scotty
-    ( formParams
+    ( formParamMaybe
+    , formParams
     , get
     , html
     , post
     , queryParam
+    , queryParamMaybe
     , scotty
     )
 
@@ -116,25 +121,38 @@ note = do
         "Code: "
         a_ [href_ "https://github.com/paolino/htmx-scroll"] "paolino/htmx-scroll"
 
-control :: Html ()
-control = form_ [id_ "control"] $ do
-    span_ $ do
-        "From: "
-        input_ [type_ "number", name_ "from"]
-    br_ mempty
-    span_ $ do
-        "To: "
-        input_ [type_ "number", name_ "to"]
-    br_ mempty
-    button_ [type_ "submit"] "Update"
+control :: Maybe Int -> Maybe Int -> Maybe Int -> Html ()
+control from to start = do
+    form_ [id_ "control"] $ do
+        table_ $ do
+            tr_ $ do
+                td_ "From: "
+                td_ $ input_ $ [type_ "number", name_ "from"] <> defaulting from
+            tr_ $ do
+                td_ "To: "
+                td_ $ input_ $ [type_ "number", name_ "to"] <> defaulting to
+            tr_ $ do
+                td_ "Start: "
+                td_ $ input_ $ [type_ "number", name_ "start"] <> defaulting start
+        button_
+            [ type_ "submit"
+            ]
+            "Update"
+    form_
+        $ button_ "Reset"
+  where
+    defaulting = maybe [] (\s -> [value_ $ showT s])
 
 main :: IO ()
 main = do
     opts <- execParser optsParser
     let portNumber = port opts
-        scroller = scrollingInts $ page opts
+        scroller = scrollingInts (page opts)
     scotty portNumber $ do
         get "/" $ do
+            from <- queryParamMaybe "from"
+            to <- queryParamMaybe "to"
+            start <- queryParamMaybe "start"
             html $ renderText $ do
                 html_ [] $ do
                     head_ $ do
@@ -150,33 +168,50 @@ main = do
                             [style_ "position: fixed; top: 0; left: 0; padding-left: 4em;"]
                             $ do
                                 title
-                                control
+                                control from to start
                                 note
-                        runIdentity $ widget scroller
+                        runIdentity $ widget $ scroller from to start
 
         post "/update" $ do
             center <- queryParam "center"
+            from <- formParamMaybe "from"
+            to <- formParamMaybe "to"
+            start <- formParamMaybe "start"
             presentsRaw <-
                 fmap snd . filter ((== "present") . fst)
                     <$> formParams
             let presents = Set.fromList $ parsePresents presentsRaw
-            html $ renderText $ runIdentity $ scroll scroller presents center
+            html $ renderText $ runIdentity $ scroll (scroller from to start) presents center
 
-scrollingInts :: Int -> Scrolling Identity Int
-scrollingInts pageSize =
+scrollingInts :: Int -> Maybe Int -> Maybe Int -> Maybe Int -> Scrolling Identity Int
+scrollingInts pageSize from to start =
     makeScrolling
         $ Configuration
             { renderIndexRows = pure . renderRows
             , uniqueScrollingId = "ints"
-            , previous = \n -> pure $ Just (n - 1)
-            , next = \n -> pure $ Just (n + 1)
+            , previous = \n -> pure $ case bottomPage of
+                Nothing -> Just (n - 1)
+                Just f -> if n > f then Just (n - 1) else Nothing
+            , next = \n -> pure $ case topPage of
+                Nothing -> Just (n + 1)
+                Just t -> if n < t then Just (n + 1) else Nothing
             , renderIndex = showT
             , updateURL = \n -> "/update?center=" <> showT n
-            , zeroIndex = 0
+            , zeroIndex = pure $ maybe 0 (`div` pageSize) $ start <|> from <|> to
             , presentFieldName = "present"
+            , controlSelector = "#control"
             }
   where
+    topPage = (`div` pageSize) <$> to
+    bottomPage = (`div` pageSize) <$> from
     renderRows :: Int -> Html ()
     renderRows j = do
-        forM_ [j * pageSize .. (j + 1) * pageSize - 1]
+        forM_ [bottom .. top]
             $ \i -> tr_ $ td_ $ toHtml $ show i
+      where
+        top = case to of
+            Just t -> min t ((j + 1) * pageSize - 1)
+            Nothing -> (j + 1) * pageSize - 1
+        bottom = case from of
+            Just f -> max f (j * pageSize)
+            Nothing -> j * pageSize
